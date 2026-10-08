@@ -68,12 +68,16 @@ jobs:
           cd target/package
           tarball="$(ls zeron-*-linux-x86_64.tar.gz)"
           stage="${tarball%.tar.gz}"
+          # scripts/package-linux.sh deletes its staging directory once the
+          # tarball is written, so rebuild the tree here with the library in it.
+          tar xzf "$tarball"
           ort_lib="$RUNNER_TEMP/onnxruntime-linux-x64-${ORT_VERSION}/lib"
           cp -a "$ort_lib/libonnxruntime.so.${ORT_VERSION}" "$stage/"
           ln -sf "libonnxruntime.so.${ORT_VERSION}" "$stage/libonnxruntime.so.1"
           cp -a "$ort_lib/libonnxruntime_providers_shared.so" "$stage/"
           rm -f "$tarball"
           tar czf "$tarball" "$stage"
+          tar tzf "$tarball" | grep -q 'libonnxruntime.so.1'
       - name: verify (glibc floor, runtime link, --version)
         run: |
           set -euxo pipefail
