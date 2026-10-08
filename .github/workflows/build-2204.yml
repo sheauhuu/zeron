@@ -77,7 +77,10 @@ jobs:
           cp -a "$ort_lib/libonnxruntime_providers_shared.so" "$stage/"
           rm -f "$tarball"
           tar czf "$tarball" "$stage"
-          tar tzf "$tarball" | grep -q 'libonnxruntime.so.1'
+          # Not `tar tzf | grep -q`: grep exits on the first match and pipefail
+          # would then fail the step on tar's SIGPIPE.
+          tar tzf "$tarball" >"$RUNNER_TEMP/tarball-list.txt"
+          grep -q 'libonnxruntime.so.1' "$RUNNER_TEMP/tarball-list.txt"
       - name: verify (glibc floor, runtime link, --version)
         run: |
           set -euxo pipefail
