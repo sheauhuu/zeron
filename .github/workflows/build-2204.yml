@@ -1,9 +1,20 @@
 name: build-ubuntu-22.04
 
 # Build the Linux x86_64 headless tarball on an ubuntu-22.04 runner so the
-# binary links against glibc 2.35 (GLIBCXX 3.4.30) instead of the 24.04
-# toolchain the official zeron.sh build uses. Needed for Ubuntu 22.04 /
+# binary links against glibc 2.35 (and libstdc++ 12) instead of the Ubuntu
+# 24.04 toolchain the official zeron.sh build uses. Needed for Ubuntu 22.04 /
 # Debian 12 era machines whose system glibc is older than GLIBC_2.38.
+#
+# ONNX Runtime is the one dependency that must not come from `ort-sys`'s
+# default download: pyke's prebuilt static build (cdn.pyke.io, ms@1.28.0) is
+# compiled against glibc 2.38+ and fails to link here (`__isoc23_strtol`,
+# `_M_replace_cold`). Instead point `ORT_LIB_LOCATION` at Microsoft's official
+# 1.28.0 shared library — same ORT/API version, but built with a glibc 2.27
+# baseline — and link dynamically via `ORT_PREFER_DYNAMIC_LINK=1`. The .so is
+# bundled into the tarball next to the binary and located through an `$ORIGIN`
+# rpath. `install.sh` copies the whole tarball directory into
+# ~/.zeron/app/<version>/, so the library lands beside the binary with no
+# source changes.
 #
 # Manual trigger only: Actions → build-ubuntu-22.04 → Run workflow → main.
 # Fork note: keep this file on the default branch (main) — workflow_dispatch
@@ -12,6 +23,9 @@ name: build-ubuntu-22.04
 
 on:
   workflow_dispatch:
+
+env:
+  ORT_VERSION: 1.28.0
 
 jobs:
   linux-2204:
@@ -27,11 +41,48 @@ jobs:
             libx11-dev libxcb1-dev libx11-xcb-dev \
             libfontconfig1-dev libfreetype-dev libasound2-dev \
             libvulkan-dev pkg-config cmake libwebkit2gtk-4.1-dev libjson-glib-dev
+      - name: onnxruntime ${{ env.ORT_VERSION }} (Microsoft prebuilt, glibc 2.27 baseline)
+        run: |
+          url="https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz"
+          curl -fsSL -o "$RUNNER_TEMP/ort.tgz" "$url"
+          tar xzf "$RUNNER_TEMP/ort.tgz" -C "$RUNNER_TEMP"
+          ort_dir="$RUNNER_TEMP/onnxruntime-linux-x64-${ORT_VERSION}/lib"
+          test -f "$ort_dir/libonnxruntime.so"
+          {
+            echo "ORT_LIB_LOCATION=$ort_dir"
+            echo "ORT_PREFER_DYNAMIC_LINK=1"
+          } >>"$GITHUB_ENV"
       - name: rust toolchain (rust-toolchain.toml)
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       - name: package
+        # `$ORIGIN` must reach the linker unexpanded (no shell expands it on
+        # the way through cargo/rustc), so the binary resolves
+        # libonnxruntime.so.1 from the directory it was installed into.
+        env:
+          RUSTFLAGS: -C link-arg=-Wl,-rpath,$ORIGIN
         run: scripts/package-linux.sh
+      - name: bundle libonnxruntime.so into the tarball
+        run: |
+          set -euxo pipefail
+          cd target/package
+          tarball="$(ls zeron-*-linux-x86_64.tar.gz)"
+          stage="${tarball%.tar.gz}"
+          ort_lib="$RUNNER_TEMP/onnxruntime-linux-x64-${ORT_VERSION}/lib"
+          cp -a "$ort_lib/libonnxruntime.so.${ORT_VERSION}" "$stage/"
+          ln -sf "libonnxruntime.so.${ORT_VERSION}" "$stage/libonnxruntime.so.1"
+          cp -a "$ort_lib/libonnxruntime_providers_shared.so" "$stage/"
+          rm -f "$tarball"
+          tar czf "$tarball" "$stage"
+      - name: verify (glibc floor, runtime link, --version)
+        run: |
+          set -euxo pipefail
+          cd target/package
+          stage="$(ls -d zeron-*-linux-x86_64)"
+          echo "binary   max GLIBC symbol: $(strings "$stage/zeron" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
+          echo "onnxrt   max GLIBC symbol: $(strings "$stage/libonnxruntime.so.${ORT_VERSION}" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
+          ldd "$stage/zeron" | grep onnxruntime
+          "$stage/zeron" --version
       - uses: actions/upload-artifact@v4
         with:
           name: linux-x86_64-ubuntu2204
