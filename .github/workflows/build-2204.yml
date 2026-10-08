@@ -1,0 +1,39 @@
+name: build-ubuntu-22.04
+
+# Build the Linux x86_64 headless tarball on an ubuntu-22.04 runner so the
+# binary links against glibc 2.35 (GLIBCXX 3.4.30) instead of the 24.04
+# toolchain the official zeron.sh build uses. Needed for Ubuntu 22.04 /
+# Debian 12 era machines whose system glibc is older than GLIBC_2.38.
+#
+# Manual trigger only: Actions → build-ubuntu-22.04 → Run workflow → main.
+# Fork note: keep this file on the default branch (main) — workflow_dispatch
+# only shows up in the UI when the workflow exists there. The file is a new
+# path upstream will never touch, so Sync fork stays conflict-free.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  linux-2204:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: gpui system deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libx11-dev libxcb1-dev libx11-xcb-dev \
+            libfontconfig1-dev libfreetype-dev libasound2-dev \
+            libvulkan-dev pkg-config cmake libwebkit2gtk-4.1-dev libjson-glib-dev
+      - name: rust toolchain (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: package
+        run: scripts/package-linux.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64-ubuntu2204
+          path: target/package/*.tar.gz
+          if-no-files-found: error
