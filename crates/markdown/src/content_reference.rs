@@ -281,9 +281,10 @@ pub(crate) fn rewrite(source: &str) -> Option<Rewritten<'_>> {
         let mut quoted = None;
         let mut escaped = false;
         let end = if visualize {
-            source[at..]
-                .find(VISUALIZE_END)
-                .filter(|n| *n <= MAX_REFERENCE_BYTES)
+            let bytes = &source.as_bytes()[at..];
+            bytes[..bytes.len().min(MAX_REFERENCE_BYTES + VISUALIZE_END.len())]
+                .windows(VISUALIZE_END.len())
+                .position(|window| window == VISUALIZE_END.as_bytes())
                 .map(|n| at + n + VISUALIZE_END.len())
         } else {
             source[at..]
@@ -354,6 +355,8 @@ mod tests {
         assert_eq!(request.path, "/tmp/方案 [a].html");
         assert!(request.wide);
         assert_eq!(links(VISUAL), [VISUAL]);
+        assert_eq!(links(&format!("{VISUAL}{VISUAL}")), [VISUAL, VISUAL]);
+        assert!(rewrite(&VISUAL.replace(",", ",\n\n")).is_none());
         for source in [
             format!("`{VISUAL}`"),
             format!("```html\n{VISUAL}\n```"),

@@ -58,7 +58,7 @@ previous/next layout navigation, parent DOM/storage isolation, and blocked
 network requests. `ZERON_HTML_PREVIEW_FILE=/absolute/example.html` additionally
 captures a local example without committing its contents.
 
-Recorded on macOS: 52 shared Markdown tests, all 1,779 UI library tests with
+Recorded on macOS: 53 shared Markdown tests, all 1,779 UI library tests with
 `--test-threads=1`, the application compile check, and the native HTML fixture
 passed. The default parallel UI runner aborts in macOS HIToolbox's concurrent
 keyboard-input-source access; its serial run passes. The HTML fixture uses

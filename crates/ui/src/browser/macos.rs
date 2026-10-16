@@ -233,7 +233,7 @@ define_class!(
                 *self.ivars().requested_url.borrow_mut() = Some(url.clone());
             }
             let allowed = if self.ivars().document.get() {
-                matches!(url.as_str(), "about:blank" | "about:srcdoc")
+                super::model::allowed_document_navigation(&url)
             } else { allowed_navigation(&url) };
             decision.call((if allowed { WKNavigationActionPolicy::Allow } else { WKNavigationActionPolicy::Cancel },));
         }

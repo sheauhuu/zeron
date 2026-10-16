@@ -619,7 +619,7 @@ impl Host {
                         match uri {
                             Ok(uri)
                                 if if host.document.borrow().is_some() {
-                                    uri == "about:blank"
+                                    super::model::allowed_document_navigation(&uri)
                                 } else {
                                     allowed_navigation(&uri)
                                 } =>
@@ -639,13 +639,21 @@ impl Host {
             // Subframes too (the main-frame event does not see them): web
             // content only — their own documents (about:blank, srcdoc, data:,
             // blob:) included — never a scheme that leaves the page.
+            let weak = Rc::downgrade(host);
             webview.add_FrameNavigationStarting(
                 &NavigationStartingEventHandler::create(Box::new(move |_, args| {
                     if let Some(args) = args {
                         let mut uri = PWSTR::null();
-                        let allowed = args
-                            .Uri(&mut uri)
-                            .is_ok_and(|()| allowed_frame_navigation(&take_pwstr(uri)));
+                        let allowed = args.Uri(&mut uri).is_ok_and(|()| {
+                            let uri = take_pwstr(uri);
+                            weak.upgrade().is_some_and(|host| {
+                                if host.document.borrow().is_some() {
+                                    super::model::allowed_document_navigation(&uri)
+                                } else {
+                                    allowed_frame_navigation(&uri)
+                                }
+                            })
+                        });
                         if !allowed {
                             args.SetCancel(true)?;
                         }
