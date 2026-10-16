@@ -1,7 +1,7 @@
 # Content references
 
 The shared Markdown parser recognizes complete `:codex-file-citation{...}`
-directives outside code, HTML, and existing links. `path` must be an absolute
+single-line directives outside code, HTML, and existing links. `path` must be an absolute
 file path; `purpose`, when present, must be `source` or `output`. Unknown or
 incomplete directives remain ordinary text.
 

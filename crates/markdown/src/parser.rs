@@ -147,28 +147,24 @@ fn parse_at(source: &str, offset: usize) -> BlockTree {
         Some((text, insertions)) => (Cow::Owned(text), Some(insertions)),
         None => (Cow::Borrowed(source), None),
     };
-    let events: Vec<(Event, Range<usize>)> = Parser::new_ext(&text, options())
-        .into_offset_iter()
-        .map(|(event, range)| {
-            // Inserted angle brackets shift every following offset; ranges
-            // come from the rewritten text and must point into the original.
-            let range = match &insertions {
-                Some(insertions) => insertions.original_range(range),
-                None => range,
-            };
-            let event = match (&event, &references) {
-                (Event::Code(_), Some(references)) => references
-                    .reference(&range)
-                    .map(|text| Event::InlineHtml(text.to_owned().into()))
-                    .unwrap_or(event),
-                _ => event,
-            };
+    let mut events = Vec::new();
+    for (event, range) in Parser::new_ext(&text, options()).into_offset_iter() {
+        // Resolve the destination rewrite first, then content replacements.
+        let range = insertions
+            .as_ref()
+            .map_or(range.clone(), |i| i.original_range(range));
+        let mut emit = |event, range: Range<usize>| {
             let range = references
                 .as_ref()
                 .map_or(range.clone(), |r| r.original_range(range));
-            (event, range.start + offset..range.end + offset)
-        })
-        .collect();
+            events.push((event, range.start + offset..range.end + offset));
+        };
+        if let Some(references) = &references {
+            references.expand(event, range, &mut emit);
+        } else {
+            emit(event, range);
+        }
+    }
     let mut cur = Cursor {
         events: &events,
         ix: 0,
@@ -886,7 +882,11 @@ fn merge_runs(runs: Vec<InlineRun>) -> Vec<InlineRun> {
     let mut out: Vec<InlineRun> = Vec::with_capacity(runs.len());
     for run in runs {
         match out.last_mut() {
-            Some(last) if last.style == run.style && run.style.image.is_none() => {
+            Some(last)
+                if last.style == run.style
+                    && run.style.image.is_none()
+                    && run.style.file_label.is_none() =>
+            {
                 last.text.push_str(&run.text)
             }
             _ => out.push(run),

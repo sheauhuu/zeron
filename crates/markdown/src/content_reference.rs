@@ -8,7 +8,7 @@ use std::ops::Range;
 use pulldown_cmark::{Event, Parser, Tag};
 
 const CITATION: &str = ":codex-file-citation{";
-const PLACEHOLDER: &str = "`\u{fffc}`";
+const PLACEHOLDER: &str = "\u{e000}zeron-content-reference\u{e001}";
 const MAX_REFERENCE_BYTES: usize = 16 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,12 +104,13 @@ struct Replacement {
     shown: Range<usize>,
 }
 
-/// Opaque code spans protect reference payloads from CommonMark punctuation.
-/// Only spans introduced by this rewrite are decoded again by the parser.
+/// Opaque text tokens protect payloads from CommonMark punctuation. Unlike
+/// code delimiters, adjacent tokens cannot fuse with each other or nearby code.
 pub(crate) struct Rewritten<'a> {
     pub text: String,
     source: &'a str,
     replacements: Vec<Replacement>,
+    placeholder: String,
 }
 
 impl Rewritten<'_> {
@@ -135,12 +136,46 @@ impl Rewritten<'_> {
         at.saturating_add_signed(delta)
     }
 
-    pub fn reference(&self, range: &Range<usize>) -> Option<&str> {
-        let ix = self
+    pub fn expand<'a>(
+        &self,
+        event: Event<'a>,
+        range: Range<usize>,
+        mut emit: impl FnMut(Event<'a>, Range<usize>),
+    ) {
+        let Event::Text(text) = event else {
+            emit(event, range);
+            return;
+        };
+        let first = self
             .replacements
             .partition_point(|r| r.shown.start < range.start);
-        let replacement = self.replacements.get(ix)?;
-        (replacement.shown == *range).then(|| &self.source[replacement.source.clone()])
+        let replacements = &self.replacements[first..];
+        if replacements.first().is_none_or(|r| r.shown.end > range.end) {
+            emit(Event::Text(text), range);
+            return;
+        }
+        let mut remaining = text.as_ref();
+        let mut start = range.start;
+        for replacement in replacements.iter().take_while(|r| r.shown.end <= range.end) {
+            let Some(at) = remaining.find(&self.placeholder) else {
+                break;
+            };
+            if at > 0 {
+                emit(
+                    Event::Text(remaining[..at].to_owned().into()),
+                    start..replacement.shown.start,
+                );
+            }
+            emit(
+                Event::InlineHtml(self.source[replacement.source.clone()].to_owned().into()),
+                replacement.shown.clone(),
+            );
+            remaining = &remaining[at + self.placeholder.len()..];
+            start = replacement.shown.end;
+        }
+        if !remaining.is_empty() {
+            emit(Event::Text(remaining.to_owned().into()), start..range.end);
+        }
     }
 }
 
@@ -163,6 +198,10 @@ pub(crate) fn rewrite(source: &str) -> Option<Rewritten<'_>> {
         })
         .collect();
     let mut text = String::new();
+    let mut placeholder = PLACEHOLDER.to_owned();
+    while source.contains(&placeholder) {
+        placeholder.push('\u{e001}');
+    }
     let mut replacements = Vec::new();
     let mut copied = 0;
     let mut at = 0;
@@ -204,12 +243,16 @@ pub(crate) fn rewrite(source: &str) -> Option<Rewritten<'_>> {
                 None
             });
         let Some(end) = end else { continue };
+        // Inline references cannot cross a paragraph boundary during streaming.
+        if source[start..end].contains(['\n', '\r']) {
+            continue;
+        }
         if file_reference(&source[start..end]).is_none() {
             continue;
         }
         text.push_str(&source[copied..start]);
         let shown_start = text.len();
-        text.push_str(PLACEHOLDER);
+        text.push_str(&placeholder);
         replacements.push(Replacement {
             source: start..end,
             shown: shown_start..text.len(),
@@ -225,6 +268,7 @@ pub(crate) fn rewrite(source: &str) -> Option<Rewritten<'_>> {
         text,
         source,
         replacements,
+        placeholder,
     })
 }
 
@@ -287,6 +331,31 @@ mod tests {
             panic!()
         };
         assert_eq!(runs[0].text, "/tmp/a%20#L4.pdf");
+    }
+
+    #[test]
+    fn adjacent_citations_and_code_keep_their_own_boundaries() {
+        let reference = r#":codex-file-citation{path="/tmp/a.pdf"}"#;
+        for source in [
+            format!("{reference}{reference}"),
+            format!("`code`{reference}{reference}`after`"),
+            format!("&amp;{reference}**{reference}**"),
+            format!("{PLACEHOLDER} {reference}{reference}"),
+        ] {
+            assert_eq!(
+                links(&source),
+                ["file:///tmp/a.pdf", "file:///tmp/a.pdf"],
+                "{source}"
+            );
+            let mut parser = IncrementalParser::new();
+            for (i, c) in source.char_indices() {
+                let end = i + c.len_utf8();
+                parser.set_text(&source[..end]);
+                assert_eq!(parser.tree(), &parse_full(&source[..end]), "{end}");
+            }
+        }
+        let multiline = ":codex-file-citation{path=\"/tmp/a.pdf\"\n\npurpose=\"source\"}";
+        assert!(rewrite(multiline).is_none());
     }
 
     #[test]
