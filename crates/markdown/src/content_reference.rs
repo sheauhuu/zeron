@@ -22,6 +22,21 @@ impl FileReference {
     }
 }
 
+/// A directive's path is literal, whereas a Markdown destination is a URI:
+/// protect percent signs and location punctuation from a second interpretation.
+pub fn file_destination(path: &str) -> String {
+    use std::fmt::Write;
+    let mut destination = String::from("file://");
+    for byte in path.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'/') {
+            destination.push(byte as char);
+        } else {
+            write!(&mut destination, "%{byte:02X}").unwrap();
+        }
+    }
+    destination
+}
+
 /// Decode one complete directive. Unknown attributes are preserved in the
 /// original message but do not grant extra behavior (e.g. page navigation).
 pub fn file_reference(text: &str) -> Option<FileReference> {
@@ -229,7 +244,13 @@ mod tests {
     #[test]
     fn citations_keep_literal_paths_and_readable_labels() {
         let source = r#"看过 :codex-file-citation{path="/tmp/空 格/a_*[x]`{y}.pdf" purpose="source"} 和 :codex-file-citation{purpose="output" path="/tmp/b.pdf"}。"#;
-        assert_eq!(links(source), ["/tmp/空 格/a_*[x]`{y}.pdf", "/tmp/b.pdf"]);
+        assert_eq!(
+            links(source),
+            [
+                file_destination("/tmp/空 格/a_*[x]`{y}.pdf"),
+                "file:///tmp/b.pdf".into()
+            ]
+        );
         let tree = parse_full(source);
         let Block::Paragraph { runs } = &tree.blocks[0].block else {
             panic!()
@@ -248,10 +269,24 @@ mod tests {
             citation.replace("/tmp/a.pdf", "javascript:alert(1)"),
             citation.replace("source", "bad"),
         ] {
-            assert!(!links(&source).contains(&"/tmp/a.pdf".into()), "{source}");
+            assert!(
+                !links(&source).contains(&"file:///tmp/a.pdf".into()),
+                "{source}"
+            );
         }
         assert!(rewrite(&format!("```text\n{citation}")).is_none());
         assert!(rewrite(&format!("    {citation}")).is_none());
+    }
+
+    #[test]
+    fn citation_paths_are_literal_not_line_anchors_or_uri_escapes() {
+        let source = r#":codex-file-citation{path="/tmp/a%20#L4.pdf" purpose="source"}"#;
+        assert_eq!(links(source), ["file:///tmp/a%2520%23L4.pdf"]);
+        let tree = parse_full(source);
+        let Block::Paragraph { runs } = &tree.blocks[0].block else {
+            panic!()
+        };
+        assert_eq!(runs[0].text, "/tmp/a%20#L4.pdf");
     }
 
     #[test]

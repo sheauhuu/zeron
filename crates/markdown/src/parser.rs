@@ -729,7 +729,7 @@ fn parse_inline_event(cur: &mut Cursor, runs: &mut Vec<InlineRun>, style: &Inlin
             if let Some(reference) = crate::content_reference::file_reference(&t) {
                 let mut style = style.clone();
                 style.file_label = Some(reference.label().to_owned());
-                style.link = Some(reference.path.clone());
+                style.link = Some(crate::content_reference::file_destination(&reference.path));
                 push(runs, reference.path, style);
             } else {
                 push(runs, t.into_string(), style.clone());
