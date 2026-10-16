@@ -131,7 +131,7 @@ impl BlockTree {
 // Full parse
 // ---------------------------------------------------------------------------
 
-fn options() -> Options {
+pub(crate) fn options() -> Options {
     Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS
 }
 
@@ -141,6 +141,8 @@ pub fn parse_full(source: &str) -> BlockTree {
 }
 
 fn parse_at(source: &str, offset: usize) -> BlockTree {
+    let references = crate::content_reference::rewrite(source);
+    let source = references.as_ref().map_or(source, |r| r.text.as_str());
     let (text, insertions) = match rewrite_absolute_destinations(source) {
         Some((text, insertions)) => (Cow::Owned(text), Some(insertions)),
         None => (Cow::Borrowed(source), None),
@@ -154,6 +156,16 @@ fn parse_at(source: &str, offset: usize) -> BlockTree {
                 Some(insertions) => insertions.original_range(range),
                 None => range,
             };
+            let event = match (&event, &references) {
+                (Event::Code(_), Some(references)) => references
+                    .reference(&range)
+                    .map(|text| Event::InlineHtml(text.to_owned().into()))
+                    .unwrap_or(event),
+                _ => event,
+            };
+            let range = references
+                .as_ref()
+                .map_or(range.clone(), |r| r.original_range(range));
             (event, range.start + offset..range.end + offset)
         })
         .collect();
@@ -713,7 +725,16 @@ fn parse_inline_event(cur: &mut Cursor, runs: &mut Vec<InlineRun>, style: &Inlin
         }
         Event::SoftBreak => push(runs, " ".into(), style.clone()),
         Event::HardBreak => push(runs, "\n".into(), style.clone()),
-        Event::Html(t) | Event::InlineHtml(t) => push(runs, t.into_string(), style.clone()),
+        Event::Html(t) | Event::InlineHtml(t) => {
+            if let Some(reference) = crate::content_reference::file_reference(&t) {
+                let mut style = style.clone();
+                style.file_label = Some(reference.label().to_owned());
+                style.link = Some(reference.path.clone());
+                push(runs, reference.path, style);
+            } else {
+                push(runs, t.into_string(), style.clone());
+            }
+        }
         Event::TaskListMarker(done) => {
             let mut style = style.clone();
             style.task = Some(TaskMarker {
