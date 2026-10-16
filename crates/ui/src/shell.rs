@@ -3980,7 +3980,8 @@ impl Shell {
                         && this.resolved_right_active(cx) == RightSurface::Browser(id)
                         && let Some(source) = &preview_source
                     {
-                        this.open_workspace_file_link(source, path, window, cx);
+                        let target = zeron_markdown::content_reference::file_destination(path);
+                        this.open_workspace_file_link(source, &target, window, cx);
                     }
                 }
                 crate::browser::BrowserEvent::NewTab(url) => {
