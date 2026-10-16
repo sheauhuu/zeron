@@ -38,10 +38,22 @@ const SAMPLE: &str = r#"
 <style>body{background:#eff7f5;color:#164f46}.card{padding:24px;border:1px solid #89b7ac;border-radius:12px}button{padding:8px 14px;border-radius:6px;border:1px solid #89b7ac;background:#fff;color:#164f46}</style>
 <h1>Sentence practice</h1><p>Compare two compact layouts.</p>
 <div class="viz-carousel" aria-label="Practice layouts">
-<section data-variant="Single column"><article class="card"><h2>Single column</h2><p>Listen, write, and compare your answer.</p><button id="answer" onclick="this.textContent='Submitted'">Submit</button></article></section>
+<section data-variant="Single column"><article class="card"><h2>Single column</h2><p>Listen, write, and compare your answer.</p><button id="answer" onclick="this.textContent='Submitted'">Submit</button><p id="translation">Translation is visible.</p></article></section>
 <section data-variant="Two columns" hidden><article class="card"><h2>Two columns</h2><p>Answer and feedback side by side.</p></article></section>
 </div>
 <script>
+const state = {stage: 'Before answer', translation: true};
+const render = () => {
+  document.querySelector('#answer').textContent = state.stage === 'After answer' ? 'Submitted' : 'Submit';
+  document.querySelector('#translation').hidden = !state.translation;
+};
+const tweak = new Tweak({container: document.querySelector('.card'), onChange: render});
+tweak.addSelect(state, 'stage', {label: 'Answer state', options: ['Before answer', 'After answer']});
+tweak.addToggle(state, 'translation', {label: 'Show translation'});
+window.addEventListener('openai:set_globals', event => {
+  state.stage = event.detail.globals.widgetState.privateContent.stage;
+  render();
+});
 addEventListener('DOMContentLoaded', () => setTimeout(async () => {
   try {
     const assert = (condition, message) => { if (!condition) throw Error(message); };
@@ -62,11 +74,68 @@ addEventListener('DOMContentLoaded', () => setTimeout(async () => {
     assert(slides[0].hidden && !slides[1].hidden, 'next variant');
     document.querySelector('nav button:first-child').click();
     assert(!slides[0].hidden && slides[1].hidden, 'previous variant');
+    const controls = document.querySelector('.zeron-visualize-controls').shadowRoot;
+    const select = controls.querySelector('select');
+    const toggle = controls.querySelector('input');
+    select.selectedIndex = 1;
+    select.dispatchEvent(new Event('change', {bubbles: true}));
+    assert(state.stage === 'After answer' && document.querySelector('#answer').textContent === 'Submitted', 'select binding');
+    select.selectedIndex = 0;
+    select.dispatchEvent(new Event('change', {bubbles: true}));
+    assert(document.querySelector('#answer').textContent === 'Submit', 'select reset');
+    toggle.click();
+    assert(!state.translation && document.querySelector('#translation').hidden, 'toggle binding');
+    await window.openai.setWidgetState({privateContent: {stage: 'After answer'}, modelContent: {stage: 'After answer'}});
+    assert(state.stage === 'After answer' && select.selectedIndex === 1, 'globals synchronization');
+    const saved = window.openai.widgetState;
+    saved.privateContent.stage = 'mutated';
+    assert(window.openai.widgetState.privateContent.stage === 'After answer', 'state leaked a mutable reference');
+    let rejected = false;
+    try { await window.openai.setWidgetState({large: 'x'.repeat(70000)}); } catch { rejected = true; }
+    assert(rejected && window.openai.widgetState.privateContent.stage === 'After answer', 'state size bound');
+    rejected = false;
+    try { await window.openai.setWidgetState({large: '字'.repeat(30000)}); } catch { rejected = true; }
+    assert(rejected, 'state bound must count UTF-8 bytes');
+    for (const invalid of [[], null, {toJSON: () => null}]) {
+      rejected = false;
+      try { await window.openai.setWidgetState(invalid); } catch { rejected = true; }
+      assert(rejected, 'invalid state shape');
+    }
+    assert(window.openai.callTool === undefined && window.openai.sendFollowUpMessage === undefined, 'unexpected host APIs');
     parent.postMessage('preview:pass', '*');
   } catch (error) { parent.postMessage('preview:fail:' + error.message, '*'); }
 }, 100));
 </script>
 "#;
+
+async fn wait_for_status(
+    browser: &Entity<BrowserSurface>,
+    expected: &str,
+    cx: &mut AsyncApp,
+) -> anyhow::Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(25);
+    loop {
+        let (status, page) = browser.read_with(cx, |browser, _| {
+            (browser.fixture_document_status(), browser.page.clone())
+        });
+        anyhow::ensure!(page.error.is_none(), "HTML load failed: {page:?}");
+        anyhow::ensure!(
+            !status
+                .as_deref()
+                .is_some_and(|s| s.starts_with("preview:fail:")),
+            "{status:?}"
+        );
+        if status.as_deref() == Some(expected) {
+            break;
+        }
+        anyhow::ensure!(
+            Instant::now() < deadline,
+            "HTML preview timed out: {status:?} {page:?}"
+        );
+        super::pause(cx, 50).await;
+    }
+    Ok(())
+}
 
 pub async fn exercise(
     window: WindowHandle<Shell>,
@@ -95,27 +164,7 @@ pub async fn exercise(
             })
         })?
         .map_err(anyhow::Error::msg)?;
-    let deadline = Instant::now() + Duration::from_secs(25);
-    loop {
-        let (status, page) = browser.read_with(cx, |browser, _| {
-            (browser.fixture_document_status(), browser.page.clone())
-        });
-        anyhow::ensure!(page.error.is_none(), "HTML load failed: {page:?}");
-        anyhow::ensure!(
-            !status
-                .as_deref()
-                .is_some_and(|s| s.starts_with("preview:fail:")),
-            "{status:?}"
-        );
-        if status.as_deref() == Some("preview:pass") {
-            break;
-        }
-        anyhow::ensure!(
-            Instant::now() < deadline,
-            "HTML preview timed out: {status:?} {page:?}"
-        );
-        super::pause(cx, 50).await;
-    }
+    wait_for_status(&browser, "preview:pass", cx).await?;
     capture(window, &browser, output, "html-preview", cx).await?;
     if let Some(path) = std::env::var_os("ZERON_HTML_PREVIEW_FILE") {
         let content = std::fs::read_to_string(path)?;
@@ -127,7 +176,12 @@ pub async fn exercise(
                 })
             })?
             .map_err(anyhow::Error::msg)?;
-        super::pause(cx, 1200).await;
+        if let Ok(expected) = std::env::var("ZERON_HTML_PREVIEW_EXPECT_STATUS") {
+            wait_for_status(&browser, &expected, cx).await?;
+        } else {
+            super::pause(cx, 1200).await;
+        }
+        super::pause(cx, 400).await; // Let the pane expansion settle before capture.
         capture(window, &browser, output, "html-preview-user-file", cx).await?;
     }
     std::fs::write(

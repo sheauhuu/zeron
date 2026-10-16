@@ -44,6 +44,16 @@ no proprietary plugin assets are bundled. It provides navigation for
 `.viz-carousel > section[data-variant]`; ordinary buttons and layout logic run
 from the original HTML. This preview path is independent of native Luau visuals.
 
+The compatibility subset also provides `new Tweak({container, onChange})`,
+`addSelect(object, key, {label, options})`, `addToggle(object, key, {label})`,
+`refresh()` and `dispose()`. Controls use native HTML inputs inside a scoped
+shadow tree and update the supplied JavaScript state before calling `onChange`.
+`window.openai.widgetState` and async `setWidgetState` are preview-local JSON
+state (64 KiB limit); updates dispatch `openai:set_globals` with
+`detail.globals.widgetState`. Reads return independent copies. State resets on
+reload/close, is never sent to the model, and grants no tool, message or host
+access. This is a compatibility subset, not the full Codex/Apps SDK runtime.
+
 Native regression scenario (macOS):
 
 ```sh
@@ -57,6 +67,9 @@ On Linux, pass the same environment flag and binary to
 previous/next layout navigation, parent DOM/storage isolation, and blocked
 network requests. `ZERON_HTML_PREVIEW_FILE=/absolute/example.html` additionally
 captures a local example without committing its contents.
+Set `ZERON_HTML_PREVIEW_EXPECT_STATUS=preview:example-pass` to wait for a custom
+example's `parent.postMessage` status before capture; `preview:fail:…` fails the
+fixture. This status relay is compiled only in fixture builds.
 
 Recorded on macOS: 53 shared Markdown tests, all 1,779 UI library tests with
 `--test-threads=1`, the application compile check, and the native HTML fixture
@@ -65,6 +78,12 @@ keyboard-input-source access; its serial run passes. The HTML fixture uses
 WebKit snapshots on macOS, without requiring screen recording permission.
 Linux/WebView2 implementations are included; their native execution remains
 to be verified on those platforms. Existing file-link routing uses POSIX paths.
+
+The design-control fixture additionally exercises select/toggle bindings,
+global-state event ordering, independent state snapshots, invalid state shapes,
+UTF-8 size bounds and absence of host tool/message APIs. A local PTE example was
+also exercised in native WebKit: both variants, answer-state select, translation
+toggle, redo/submit, and synchronization between buttons and controls passed.
 
 Validation: `cargo test --locked -p zeron-markdown`. Coverage includes punctuation
 and Unicode in paths, code examples, malformed directives, source offsets after

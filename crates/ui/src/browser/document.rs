@@ -27,10 +27,14 @@ impl HtmlDocument {
             HtmlCompatibility::None => "",
             HtmlCompatibility::CodexVisualize => include_str!("visualize.js"),
         };
+        let controls = match request.compatibility {
+            HtmlCompatibility::None => "",
+            HtmlCompatibility::CodexVisualize => include_str!("visualize-controls.js"),
+        };
         // The iframe has a unique origin, scripts only, no host API. The CSP
         // also applies to srcdoc: content cannot relax it with its own meta tag.
         let child = format!(
-            "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><style>:root{{color-scheme:light dark}}body{{margin:16px;font:14px system-ui}}[hidden]{{display:none!important}}</style><script>{runtime}</script></head><body>{content}</body></html>"
+            "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><style>:root{{color-scheme:light dark}}body{{margin:16px;font:14px system-ui}}[hidden]{{display:none!important}}</style><script>{controls}</script><script>{runtime}</script></head><body>{content}</body></html>"
         );
         let width = if request.wide { "100%" } else { "960px" };
         let html = format!(
