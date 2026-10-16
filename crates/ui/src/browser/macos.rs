@@ -908,4 +908,21 @@ impl NativePage {
                 .evaluateJavaScript_completionHandler(&NSString::from_str(script), None);
         }
     }
+
+    pub fn fixture_snapshot(&self, completion: impl FnOnce(Result<Vec<u8>, String>) + 'static) {
+        use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSImage};
+        let completion = RefCell::new(Some(completion));
+        let block = block2::RcBlock::new(move |image: *mut NSImage, error: *mut NSError| {
+            let result = (|| {
+                if let Some(error) = unsafe { error.as_ref() } { return Err(error.to_string()); }
+                let image = unsafe { image.as_ref() }.ok_or("WebKit snapshot returned no image")?;
+                let tiff = image.TIFFRepresentation().ok_or("Snapshot TIFF conversion failed")?;
+                let bitmap = NSBitmapImageRep::imageRepWithData(&tiff).ok_or("Snapshot bitmap conversion failed")?;
+                let data = unsafe { bitmap.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new()) }.ok_or("Snapshot PNG conversion failed")?;
+                Ok(unsafe { data.as_bytes_unchecked() }.to_vec())
+            })();
+            if let Some(completion) = completion.borrow_mut().take() { completion(result); }
+        });
+        unsafe { self.0.borrow().view.takeSnapshotWithConfiguration_completionHandler(None, &block); }
+    }
 }

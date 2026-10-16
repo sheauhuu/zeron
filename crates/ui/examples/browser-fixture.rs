@@ -232,7 +232,7 @@ fn main() -> anyhow::Result<()> {
             let run: anyhow::Result<()> = async {
                 pause(cx, 1200).await;
                 if std::env::var_os("ZERON_HTML_PREVIEW_FIXTURE_ONLY").is_some() {
-                    return html_preview::exercise(window, &output, cx).await;
+                    return html_preview::exercise(window, state.clone(), &output, cx).await;
                 }
                 if let Some(url) = &storage_url {
                     storage::exercise(window, state.clone(), &storage_root, &storage_profile, url, cx).await?;

@@ -935,6 +935,11 @@ impl BrowserSurface {
             None
         }
     }
+
+    #[cfg(target_os = "macos")]
+    pub fn fixture_snapshot(&self, completion: impl FnOnce(Result<Vec<u8>, String>) + 'static) {
+        self.native.as_ref().unwrap().fixture_snapshot(completion);
+    }
 }
 
 #[cfg(test)]

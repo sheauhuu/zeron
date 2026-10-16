@@ -48,7 +48,7 @@ Native regression scenario (macOS):
 
 ```sh
 cargo build --locked -p zeron-ui --example browser-fixture --features browser-fixture
-ZERON_HTML_PREVIEW_FIXTURE_ONLY=1 scripts/run-macos-browser-fixture.sh \
+ZERON_HTML_PREVIEW_FIXTURE_ONLY=1 bash scripts/run-macos-browser-fixture.sh \
   target/debug/examples/browser-fixture /tmp/zeron-html-preview
 ```
 
@@ -57,6 +57,14 @@ On Linux, pass the same environment flag and binary to
 previous/next layout navigation, parent DOM/storage isolation, and blocked
 network requests. `ZERON_HTML_PREVIEW_FILE=/absolute/example.html` additionally
 captures a local example without committing its contents.
+
+Recorded on macOS: 52 shared Markdown tests, all 1,779 UI library tests with
+`--test-threads=1`, the application compile check, and the native HTML fixture
+passed. The default parallel UI runner aborts in macOS HIToolbox's concurrent
+keyboard-input-source access; its serial run passes. The HTML fixture uses
+WebKit snapshots on macOS, without requiring screen recording permission.
+Linux/WebView2 implementations are included; their native execution remains
+to be verified on those platforms. Existing file-link routing uses POSIX paths.
 
 Validation: `cargo test --locked -p zeron-markdown`. Coverage includes punctuation
 and Unicode in paths, code examples, malformed directives, source offsets after
