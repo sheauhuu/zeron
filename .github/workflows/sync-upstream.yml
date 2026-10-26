@@ -1,0 +1,102 @@
+name: sync-upstream
+
+# Setup and recovery: .github/FORK.md. Kept separate from build-2204.yml.
+# A dedicated write-enabled deploy key authenticates pushes to this fork only.
+# Upstream can change workflow files, which GITHUB_TOKEN cannot update.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-upstream-main
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'sheauhuu/zeron' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check sync credential
+        env:
+          SYNC_SSH_KEY: ${{ secrets.UPSTREAM_SYNC_SSH_KEY }}
+        run: |
+          if [ -z "$SYNC_SSH_KEY" ]; then
+            echo '::error::Configure the dedicated deploy key and UPSTREAM_SYNC_SSH_KEY repository secret. See .github/FORK.md.'
+            exit 1
+          fi
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: main
+          fetch-depth: 0
+          ssh-key: ${{ secrets.UPSTREAM_SYNC_SSH_KEY }}
+      - name: Rebase fork commits onto upstream main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git config commit.gpgsign false
+
+          git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+          # Do not send the fork's credential when fetching the public upstream.
+          git -c http.https://github.com/.extraheader= fetch --no-tags \
+            https://github.com/zeronsh/zeron.git \
+            '+refs/heads/main:refs/remotes/upstream/main'
+          fork_sha="$(git rev-parse refs/remotes/origin/main)"
+          upstream_sha="$(git rev-parse refs/remotes/upstream/main)"
+          base="$(git merge-base "$fork_sha" "$upstream_sha")"
+          count="$(git rev-list --count "$base..$fork_sha")"
+          merges="$(git rev-list --merges "$base..$fork_sha")"
+          if [ -n "$merges" ]; then
+            {
+              echo '### Sync stopped; remote main was not changed'
+              echo 'Fork-only history contains merge commits. Ask AI to review it before rebasing.'
+              echo '```'
+              git log --oneline --merges "$base..$fork_sha"
+              echo '```'
+            } >>"$GITHUB_STEP_SUMMARY"
+            echo '::error::Fork history must be linear; merge commits require manual review. Remote main was not changed.'
+            exit 1
+          fi
+          if [ "$base" = "$upstream_sha" ]; then
+            echo "Already synchronized; $count fork commits preserved, nothing to push." >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          git checkout --detach "$fork_sha"
+          # Preserve individual commits, including intentionally empty commits.
+          # Stop if replay makes a commit empty instead of silently dropping it.
+          if ! git -c rerere.enabled=false rebase \
+            --reapply-cherry-picks --keep-empty --empty=stop \
+            --no-autosquash --no-update-refs \
+            --onto "$upstream_sha" "$base"; then
+            {
+              echo '### Sync failed; remote main was not changed'
+              echo 'Rebase stopped on a conflict or a commit that became empty. Give this run URL to AI.'
+              echo '```'
+              git show -s --format='%h %s' REBASE_HEAD 2>/dev/null || true
+              git diff --name-only --diff-filter=U
+              git status --short
+              echo '```'
+            } >>"$GITHUB_STEP_SUMMARY"
+            git rebase --abort
+            echo '::error::Rebase failed. Resolve manually; remote main was not changed.'
+            exit 1
+          fi
+          git merge-base --is-ancestor "$upstream_sha" HEAD
+          test "$(git rev-list --count "$upstream_sha..HEAD")" -eq "$count"
+
+          # Reject the push if anyone updated main since our fetch.
+          git push --force-with-lease="refs/heads/main:$fork_sha" \
+            origin HEAD:refs/heads/main
+          {
+            echo '### Sync succeeded'
+            echo "Upstream: $upstream_sha"
+            echo "Previous fork tip: $fork_sha"
+            echo "New fork tip: $(git rev-parse HEAD)"
+            echo "Preserved $count individual fork commits; no squash was performed."
+            echo 'Run build-ubuntu-22.04 on main separately if needed.'
+          } >>"$GITHUB_STEP_SUMMARY"
